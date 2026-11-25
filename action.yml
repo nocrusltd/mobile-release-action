@@ -1,0 +1,101 @@
+name: Nocrus Mobile Release
+description: Build an Expo app and submit it to TestFlight or Google Play. Requires a Nocrus licence.
+author: Nocrus Limited
+
+inputs:
+  licence-key:
+    description: Your Nocrus Mobile Release licence key. Keep it in an Actions secret.
+    required: true
+  platform:
+    description: ios or android.
+    required: true
+  profile:
+    description: The eas.json build and submit profile.
+    default: production
+  submit:
+    description: Submit the build to TestFlight (ios) or Google Play (android). "false" builds only.
+    default: "false"
+  pre-build:
+    description: A shell command to run in the project before the native project is generated, for example to write API keys into .env.
+    default: ""
+  working-directory:
+    description: The Expo project directory, relative to the workspace.
+    default: "."
+  output-dir:
+    description: Where the built file is written, relative to the project directory.
+    default: build
+  eas-cli-version:
+    description: The eas-cli version to install ("latest" or MAJOR.MINOR.PATCH). Empty uses the eas already on the runner.
+    default: latest
+  upload-artifact:
+    description: Upload the built file as a workflow artifact named <platform>-build.
+    default: "true"
+  licensing-url:
+    description: The licensing service. Leave at the default.
+    default: https://licensing.nocrus.co.uk
+
+outputs:
+  artifact-path:
+    description: Path of the built .ipa, .aab or .apk, relative to the workspace.
+    value: ${{ steps.release.outputs.artifact-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Tool directory
+      id: dir
+      shell: bash
+      run: echo "path=$RUNNER_TEMP/nocrus-mobile-release" >> "$GITHUB_OUTPUT"
+
+    # The tool and the licence file from an earlier run. The key carries the
+    # run ID so every run saves a fresh copy; restore takes the newest.
+    - name: Restore the licence cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.dir.outputs.path }}
+        key: nocrus-mobile-release-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          nocrus-mobile-release-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Licence
+      id: licence
+      shell: bash
+      env:
+        NOCRUS_TOOL_DIR: ${{ steps.dir.outputs.path }}
+        INPUT_LICENCE_KEY: ${{ inputs.licence-key }}
+        INPUT_PLATFORM: ${{ inputs.platform }}
+        INPUT_LICENSING_URL: ${{ inputs.licensing-url }}
+      run: |
+        command -v node >/dev/null || { echo "::error title=Nocrus Mobile Release::node is not on the PATH. Run actions/setup-node before this action."; exit 1; }
+        node "$GITHUB_ACTION_PATH/fetch.mjs"
+
+    - name: Save the licence cache
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.dir.outputs.path }}
+        key: nocrus-mobile-release-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    - name: Build and release
+      id: release
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        NOCRUS_TOOL: ${{ steps.licence.outputs.tool }}
+        NOCRUS_LICENCE_FILE: ${{ steps.licence.outputs.licence-file }}
+        INPUT_PLATFORM: ${{ inputs.platform }}
+        INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_SUBMIT: ${{ inputs.submit }}
+        INPUT_PRE_BUILD: ${{ inputs.pre-build }}
+        INPUT_OUTPUT_DIR: ${{ inputs.output-dir }}
+        INPUT_EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: '"$NOCRUS_TOOL" release'
+
+    - name: Upload the build
+      if: inputs.upload-artifact == 'true' && steps.release.outputs.artifact-path != ''
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.platform }}-build
+        path: ${{ steps.release.outputs.artifact-path }}
+        retention-days: 30
+        if-no-files-found: error

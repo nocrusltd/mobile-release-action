@@ -1,0 +1,138 @@
+// Gets this run a licence and the release tool.
+//
+// The run proves which GitHub organisation it belongs to with an ID token
+// GitHub signs for it, and presents the licence key. The licensing service
+// answers with a signed licence file, valid for a few days, and where to
+// download the tool. Both are kept in the tool directory, which the action
+// caches between runs: if the licensing service cannot be reached, a run with
+// a licence file that is still valid carries on with what the cache holds.
+//
+// Node built-ins only: this file runs as checked out, with no install step.
+import { createHash } from 'node:crypto';
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const AUDIENCE = 'https://licensing.nocrus.co.uk';
+// The command-line interface this version of the action drives. The service
+// offers the newest tool with this major version.
+const TOOL_MAJOR = 1;
+
+export class Refused extends Error {}
+
+const OS = { darwin: 'darwin', linux: 'linux' };
+const ARCH = { arm64: 'arm64', x64: 'amd64' };
+
+async function idToken(env, fetchFn) {
+  const url = env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const token = env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (!url || !token) {
+    throw new Refused(
+      'This job cannot request a GitHub ID token. Add to the job:\n  permissions:\n    id-token: write\n    contents: read',
+    );
+  }
+  const res = await fetchFn(`${url}&audience=${encodeURIComponent(AUDIENCE)}`, {
+    headers: { authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!res.ok) throw new Error(`GitHub answered ${res.status} to the ID token request`);
+  const body = await res.json();
+  if (!body.value) throw new Error('GitHub returned no ID token');
+  return body.value;
+}
+
+async function sha256(path) {
+  try {
+    return createHash('sha256').update(await readFile(path)).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+// Returns { tool, licenceFile, offline }: the paths to run with.
+export async function prepare({ env, dir, platform, licenceKey, baseUrl, fetchFn = fetch, log = console.log }) {
+  const os = OS[process.platform];
+  const arch = ARCH[process.arch];
+  if (!os || !arch) throw new Refused(`No release tool is published for ${process.platform}/${process.arch}.`);
+  if (!licenceKey) {
+    throw new Refused('No licence key. Pass it to the action:\n  with:\n    licence-key: ${{ secrets.NOCRUS_LICENCE_KEY }}');
+  }
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const tool = join(dir, 'mobile-release');
+  const licenceFile = join(dir, 'licence.lic');
+
+  const token = await idToken(env, fetchFn);
+
+  let res;
+  let grant;
+  try {
+    res = await fetchFn(`${baseUrl}/ci/v1/grant`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ licence_key: licenceKey, platform, os, arch, tool_major: TOOL_MAJOR }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (res.status >= 500) throw new Error(`status ${res.status}`);
+    grant = await res.json();
+  } catch (err) {
+    // Unreachable or failing, as opposed to an answer of "no": carry on with
+    // a cached licence file if there is one. The tool checks the file's
+    // signature and expiry itself, so a stale cache cannot extend a licence.
+    if ((await sha256(tool)) && (await sha256(licenceFile))) {
+      log(`::warning::The licensing service could not be reached (${err.message}). Continuing with the cached licence file, which the tool will check.`);
+      return { tool, licenceFile, offline: true };
+    }
+    throw new Error(`The licensing service could not be reached (${err.message}) and this runner has no cached licence to fall back on. Re-run the job; if it persists, contact Nocrus support.`);
+  }
+  if (!res.ok) {
+    // An answer of "no" is final: never fall back to the cache.
+    const e = grant?.error ?? {};
+    throw new Refused(`${e.message ?? `The licensing service answered ${res.status}.`}${e.code ? ` (${e.code})` : ''}`);
+  }
+  if (typeof grant.licence_file !== 'string' || !/^[0-9a-f]{64}$/.test(grant.tool?.sha256 ?? '') || !grant.tool?.url) {
+    throw new Error('The licensing service sent an answer this version of the action does not understand. Update the action.');
+  }
+
+  await writeFile(licenceFile, grant.licence_file, { mode: 0o600 });
+
+  if ((await sha256(tool)) !== grant.tool.sha256) {
+    const dl = await fetchFn(grant.tool.url, { signal: AbortSignal.timeout(300_000) });
+    if (!dl.ok) throw new Error(`Downloading the release tool answered ${dl.status}.`);
+    const bytes = Buffer.from(await dl.arrayBuffer());
+    const got = createHash('sha256').update(bytes).digest('hex');
+    if (got !== grant.tool.sha256) {
+      throw new Error('The downloaded release tool does not match its checksum. Nothing was run. Re-run the job; if it persists, contact Nocrus support.');
+    }
+    // Written beside its final name and moved into place, so an interrupted
+    // download never leaves a half-written executable in the cache.
+    const tmp = `${tool}.download`;
+    await writeFile(tmp, bytes, { mode: 0o700 });
+    await rename(tmp, tool);
+    log(`Release tool ${grant.tool.version} downloaded.`);
+  } else {
+    log(`Release tool ${grant.tool.version} (cached).`);
+  }
+  await chmod(tool, 0o700);
+  return { tool, licenceFile, offline: false };
+}
+
+async function main() {
+  const env = process.env;
+  try {
+    const out = await prepare({
+      env,
+      dir: env.NOCRUS_TOOL_DIR,
+      platform: env.INPUT_PLATFORM,
+      licenceKey: env.INPUT_LICENCE_KEY,
+      baseUrl: (env.INPUT_LICENSING_URL || AUDIENCE).replace(/\/+$/, ''),
+    });
+    appendFileSync(env.GITHUB_OUTPUT, `tool=${out.tool}\nlicence-file=${out.licenceFile}\n`);
+  } catch (err) {
+    // One annotation, no stack: the message is written for the person
+    // reading the job log.
+    console.log(`::error title=Nocrus Mobile Release::${String(err.message).replace(/%/g, '%25').replace(/\r?\n/g, '%0A')}`);
+    process.exit(1);
+  }
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) await main();
