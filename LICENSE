@@ -1,9 +1,7 @@
 Copyright (c) 2026 Nocrus Limited. All rights reserved.
 
-This repository contains the GitHub Action that obtains and runs the Nocrus
-Mobile Release tool. The files in this repository may be used, unmodified,
-only to run that tool under a current licence agreement with Nocrus Limited.
-The tool itself is licensed separately under that agreement and is not open
-source. No other rights are granted.
+Nocrus Mobile Release is commercial software, not open source. It may be
+used only under a signed licence agreement or order with Nocrus Limited.
+The standard terms are in LICENCE-TERMS.md; the signed agreement prevails.
 
 Licensing enquiries: licensing@nocrus.co.uk

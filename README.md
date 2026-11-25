@@ -100,6 +100,11 @@ A licence covers one GitHub organisation and a set number of its
 repositories. It works on github.com; GitHub Enterprise Server is not
 supported.
 
+## Licence
+
+Commercial software. The standard terms are in [LICENCE-TERMS.md](LICENCE-TERMS.md);
+your signed agreement with Nocrus prevails.
+
 ## Support
 
 licensing@nocrus.co.uk
