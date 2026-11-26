@@ -5,7 +5,8 @@
 // answers with a signed licence file, valid for a few days, and where to
 // download the tool. Both are kept in the tool directory, which the action
 // caches between runs: if the licensing service cannot be reached, a run with
-// a licence file that is still valid carries on with what the cache holds.
+// a licence file that is still valid carries on with what the cache holds,
+// provided the cached tool is still one the release key signed.
 //
 // Node built-ins only: this file runs as checked out, with no install step.
 import { createHash, createPublicKey, verify } from 'node:crypto';
@@ -75,6 +76,33 @@ async function sha256(path) {
   }
 }
 
+// The name a build for this runner is signed under. The name and the major
+// version are ours, never taken from an answer or from the cache, so a signed
+// build for another platform or major cannot be passed off here.
+const buildName = (os, arch) => `mobile-release-v${TOOL_MAJOR}-${os}-${arch}`;
+const VERSION = new RegExp(`^${TOOL_MAJOR}\\.\\d+\\.\\d+$`);
+
+// True when the tool in the cache is, byte for byte, a build the release key
+// signed for this runner. The cache is storage like any other: whatever can
+// write to it could put a different executable there. The version, checksum
+// and signature saved beside the tool are not trusted either; they only have
+// to add up to a statement the release key signed about the file on disk.
+async function cachedToolSigned({ tool, receipt, os, arch, publicKeyHex }) {
+  let saved;
+  try {
+    saved = JSON.parse(await readFile(receipt, 'utf8'));
+  } catch {
+    return false;
+  }
+  const sum = await sha256(tool);
+  const version = String(saved?.version ?? '');
+  return (
+    sum !== null &&
+    VERSION.test(version) &&
+    signed({ filename: buildName(os, arch), version, sha256: sum, signature: String(saved?.signature ?? ''), publicKeyHex })
+  );
+}
+
 // Returns { tool, licenceFile, offline }: the paths to run with.
 export async function prepare({ env, dir, platform, licenceKey, baseUrl, fetchFn = fetch, log = console.log, publicKeyHex = RELEASE_PUBLIC_KEY_HEX }) {
   const os = OS[process.platform];
@@ -86,6 +114,7 @@ export async function prepare({ env, dir, platform, licenceKey, baseUrl, fetchFn
   await mkdir(dir, { recursive: true, mode: 0o700 });
   const tool = join(dir, 'mobile-release');
   const licenceFile = join(dir, 'licence.lic');
+  const receipt = join(dir, 'mobile-release.sig.json');
 
   const token = await idToken(env, fetchFn);
 
@@ -104,7 +133,11 @@ export async function prepare({ env, dir, platform, licenceKey, baseUrl, fetchFn
     // Unreachable or failing, as opposed to an answer of "no": carry on with
     // a cached licence file if there is one. The tool checks the file's
     // signature and expiry itself, so a stale cache cannot extend a licence.
+    // The tool is checked here, against the release key, before it is run.
     if ((await sha256(tool)) && (await sha256(licenceFile))) {
+      if (!(await cachedToolSigned({ tool, receipt, os, arch, publicKeyHex }))) {
+        throw new Error(`The licensing service could not be reached (${err.message}) and the release tool in this runner's cache could not be checked against the Nocrus release key, so it was not run. Re-run the job when the service is reachable; if it persists, contact Nocrus support.`);
+      }
       log(`::warning::The licensing service could not be reached (${err.message}). Continuing with the cached licence file, which the tool will check.`);
       return { tool, licenceFile, offline: true };
     }
@@ -121,14 +154,12 @@ export async function prepare({ env, dir, platform, licenceKey, baseUrl, fetchFn
 
   // Before anything is written or downloaded: the build on offer must be one
   // the release key signed, under the name this runner asked for and at a
-  // version this action drives. The name and major version are ours, not the
-  // answer's, so a signed build for another platform or major cannot be
-  // passed off here.
-  const expected = `mobile-release-v${TOOL_MAJOR}-${os}-${arch}`;
+  // version this action drives.
   const version = String(grant.tool.version ?? '');
+  const signature = String(grant.tool.signature ?? '');
   if (
-    !new RegExp(`^${TOOL_MAJOR}\\.\\d+\\.\\d+$`).test(version) ||
-    !signed({ filename: expected, version, sha256: grant.tool.sha256, signature: String(grant.tool.signature ?? ''), publicKeyHex })
+    !VERSION.test(version) ||
+    !signed({ filename: buildName(os, arch), version, sha256: grant.tool.sha256, signature, publicKeyHex })
   ) {
     throw new Error('The release tool on offer is not signed by Nocrus. Nothing was downloaded or run. Re-run the job; if it persists, contact Nocrus support and do not work around this.');
   }
@@ -153,6 +184,8 @@ export async function prepare({ env, dir, platform, licenceKey, baseUrl, fetchFn
     log(`Release tool ${grant.tool.version} (cached).`);
   }
   await chmod(tool, 0o700);
+  // What a later run needs to check this tool again without the service.
+  await writeFile(receipt, JSON.stringify({ version, signature }), { mode: 0o600 });
   return { tool, licenceFile, offline: false };
 }
 

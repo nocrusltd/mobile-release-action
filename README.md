@@ -96,7 +96,9 @@ returns a signed licence file and the release tool. The tool is signed by
 Nocrus at release, and this action checks that signature against a key it
 carries before running anything. Both are cached, so if
 the service cannot be reached a run continues on a cached licence for up to
-72 hours.
+72 hours. The cached tool is checked against the same key first; a cache
+saved by version 1.1.0 or earlier of this action cannot be checked, and is
+replaced on the next run that reaches the service.
 
 A licence covers one GitHub organisation and a set number of its
 repositories. It works on github.com; GitHub Enterprise Server is not
