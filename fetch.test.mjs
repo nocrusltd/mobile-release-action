@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, sign as edSign } from 'node:crypto';
-import { mkdtemp, readFile, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -98,6 +98,34 @@ test('an unreachable service falls back to the cache', async () => {
     const w = world({ grant });
     const out = await prepare({ ...a, fetchFn: w.fetchFn });
     assert.equal(out.offline, true);
+  }
+});
+
+// The cache is not trusted: with the service down, a tool that is not the
+// build the release key signed is not handed back to be run.
+test('an unreachable service does not fall back to a cached tool the release key did not sign', async () => {
+  const down = () => world({ grant: () => { throw new Error('connect ETIMEDOUT'); } });
+  const other = generateKeyPairSync('ed25519').privateKey;
+  const EVIL = Buffer.from('#!/bin/sh\necho evil\n');
+  const evilSum = createHash('sha256').update(EVIL).digest('hex');
+  const cases = {
+    'the tool was replaced': async (dir) => writeFile(join(dir, 'mobile-release'), EVIL, { mode: 0o700 }),
+    'the tool and its record were replaced, signed by another key': async (dir) => {
+      await writeFile(join(dir, 'mobile-release'), EVIL, { mode: 0o700 });
+      await writeFile(join(dir, 'mobile-release.sig.json'), JSON.stringify({ version: '1.2.3', signature: sig({ sum: evilSum, key: other }) }));
+    },
+    'the record is missing, as in a cache an older action saved': async (dir) => rm(join(dir, 'mobile-release.sig.json')),
+    'the record is not JSON': async (dir) => writeFile(join(dir, 'mobile-release.sig.json'), 'null'),
+    'the record names another version': async (dir) => writeFile(join(dir, 'mobile-release.sig.json'), JSON.stringify({ version: '1.2.4', signature: sig() })),
+    'the record names another major': async (dir) => writeFile(join(dir, 'mobile-release.sig.json'), JSON.stringify({ version: '2.0.0', signature: sig({ name: NAME.replace('-v1-', '-v2-'), version: '2.0.0' }) })),
+  };
+  for (const [name, tamper] of Object.entries(cases)) {
+    const a = await args(world({ grant: ok }));
+    await prepare(a);
+    // untouched, the cache is accepted: the refusals below are the tampering
+    assert.equal((await prepare({ ...a, fetchFn: down().fetchFn })).offline, true, name);
+    await tamper(a.dir);
+    await assert.rejects(prepare({ ...a, fetchFn: down().fetchFn }), /could not be checked against the Nocrus release key/, name);
   }
 });
 
