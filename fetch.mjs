@@ -8,7 +8,7 @@
 // a licence file that is still valid carries on with what the cache holds.
 //
 // Node built-ins only: this file runs as checked out, with no install step.
-import { createHash } from 'node:crypto';
+import { createHash, createPublicKey, verify } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -18,7 +18,33 @@ const AUDIENCE = 'https://licensing.nocrus.co.uk';
 // offers the newest tool with this major version.
 const TOOL_MAJOR = 1;
 
+// The public half of the key release builds of the tool are signed with
+// (nocrusltd/mobile-release, packaging/release-key.pub). The private half
+// signs at release time and is held nowhere a download passes through.
+// This is the one thing this action trusts about the tool: the licensing
+// service, the licence server and its storage only relay a build, and a
+// build none of them could have signed is refused here.
+const RELEASE_PUBLIC_KEY_HEX = '3d829d0d5ebf9517a82eea041b3976fb6417c713bb20758332a2290572103ed7';
+
 export class Refused extends Error {}
+
+// True when signature is the release key's signature over the statement
+// "this file name, at this version, has this SHA-256". The text must match
+// packaging/signtool in the tool's repository byte for byte.
+export function signed({ filename, version, sha256, signature, publicKeyHex }) {
+  try {
+    const key = createPublicKey({
+      // an Ed25519 public key in SubjectPublicKeyInfo form: a fixed prefix and the 32 bytes
+      key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(publicKeyHex, 'hex')]),
+      format: 'der',
+      type: 'spki',
+    });
+    const statement = Buffer.from(`nocrus-mobile-release-v1\n${filename}\n${version}\n${sha256}\n`);
+    return verify(null, statement, key, Buffer.from(signature, 'base64'));
+  } catch {
+    return false;
+  }
+}
 
 const OS = { darwin: 'darwin', linux: 'linux' };
 const ARCH = { arm64: 'arm64', x64: 'amd64' };
@@ -50,7 +76,7 @@ async function sha256(path) {
 }
 
 // Returns { tool, licenceFile, offline }: the paths to run with.
-export async function prepare({ env, dir, platform, licenceKey, baseUrl, fetchFn = fetch, log = console.log }) {
+export async function prepare({ env, dir, platform, licenceKey, baseUrl, fetchFn = fetch, log = console.log, publicKeyHex = RELEASE_PUBLIC_KEY_HEX }) {
   const os = OS[process.platform];
   const arch = ARCH[process.arch];
   if (!os || !arch) throw new Refused(`No release tool is published for ${process.platform}/${process.arch}.`);
@@ -91,6 +117,20 @@ export async function prepare({ env, dir, platform, licenceKey, baseUrl, fetchFn
   }
   if (typeof grant.licence_file !== 'string' || !/^[0-9a-f]{64}$/.test(grant.tool?.sha256 ?? '') || !grant.tool?.url) {
     throw new Error('The licensing service sent an answer this version of the action does not understand. Update the action.');
+  }
+
+  // Before anything is written or downloaded: the build on offer must be one
+  // the release key signed, under the name this runner asked for and at a
+  // version this action drives. The name and major version are ours, not the
+  // answer's, so a signed build for another platform or major cannot be
+  // passed off here.
+  const expected = `mobile-release-v${TOOL_MAJOR}-${os}-${arch}`;
+  const version = String(grant.tool.version ?? '');
+  if (
+    !new RegExp(`^${TOOL_MAJOR}\\.\\d+\\.\\d+$`).test(version) ||
+    !signed({ filename: expected, version, sha256: grant.tool.sha256, signature: String(grant.tool.signature ?? ''), publicKeyHex })
+  ) {
+    throw new Error('The release tool on offer is not signed by Nocrus. Nothing was downloaded or run. Re-run the job; if it persists, contact Nocrus support and do not work around this.');
   }
 
   await writeFile(licenceFile, grant.licence_file, { mode: 0o600 });

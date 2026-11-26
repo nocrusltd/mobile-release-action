@@ -25,8 +25,8 @@ inputs:
     description: Where the built file is written, relative to the project directory.
     default: build
   eas-cli-version:
-    description: The eas-cli version to install ("latest" or MAJOR.MINOR.PATCH). Empty uses the eas already on the runner.
-    default: latest
+    description: The eas-cli version to install. "tested" is the version this release of the tool was run against; "latest" or MAJOR.MINOR.PATCH are also accepted. Empty uses the eas already on the runner.
+    default: tested
   upload-artifact:
     description: Upload the built file as a workflow artifact named <platform>-build.
     default: "true"

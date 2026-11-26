@@ -1,9 +1,8 @@
 name: ci
 
+# Pull requests only: a push to main is tested by the release workflow.
 on:
   pull_request:
-  push:
-    branches: [main]
 
 permissions:
   contents: read

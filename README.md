@@ -66,7 +66,7 @@ submit profile (`production` unless you set `profile`).
 | `pre-build` | | A shell command to run before the native project is generated. |
 | `working-directory` | `.` | The Expo project directory. |
 | `output-dir` | `build` | Where the built file is written. |
-| `eas-cli-version` | `latest` | `latest`, a version, or empty to use the eas already installed. |
+| `eas-cli-version` | `tested` | `tested` installs the eas-cli version the tool was tested with. `latest`, a version, or empty (use the eas already installed) are also accepted. |
 | `upload-artifact` | `true` | Upload the build as the artifact `<platform>-build`. |
 
 Output: `artifact-path`, the built `.ipa`, `.aab` or `.apk`.
@@ -92,7 +92,9 @@ to Expo's `eas` command and are never sent to Nocrus.
 Each run contacts `licensing.nocrus.co.uk` once, with your licence key and a
 short-lived identity token GitHub issues for the run. That token names the
 repository and organisation; it grants no access to your code. The service
-returns a signed licence file and the release tool. Both are cached, so if
+returns a signed licence file and the release tool. The tool is signed by
+Nocrus at release, and this action checks that signature against a key it
+carries before running anything. Both are cached, so if
 the service cannot be reached a run continues on a cached licence for up to
 72 hours.
 

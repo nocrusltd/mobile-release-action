@@ -1,0 +1,57 @@
+# Release: every push to main is analysed by semantic-release (conventional
+# commits). A fix: or feat: tags v<version> and creates the GitHub Release,
+# then the major tag (v1) is moved to it.
+#
+# MERGING A fix: OR feat: TO main CHANGES WHAT EVERY CUSTOMER ON @v1 RUNS on
+# their next release. Customers who pin a commit are unaffected.
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: node --test
+
+  release:
+    needs: test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # the tags and the GitHub Release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0 # the full history and tags, or the next version is wrong
+      - name: Tag and GitHub Release
+        id: semantic
+        uses: cycjimmy/semantic-release-action@ad51787758d9654d5a75150a89a6fa9b3ccef95e # v8.1.4
+        with:
+          semantic_version: 24
+          extra_plugins: |
+            conventional-changelog-conventionalcommits@8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Customers reference the major tag. It follows the newest release of
+      # its major and nothing else moves it.
+      - name: Move the major tag
+        if: steps.semantic.outputs.new_release_published == 'true'
+        env:
+          MAJOR: ${{ steps.semantic.outputs.new_release_major_version }}
+          VERSION: ${{ steps.semantic.outputs.new_release_version }}
+        run: |
+          [[ "$MAJOR" =~ ^[0-9]+$ ]]
+          git tag --force "v$MAJOR" "v$VERSION^{commit}"
+          git push --force origin "refs/tags/v$MAJOR"
