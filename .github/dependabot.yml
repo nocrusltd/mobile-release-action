@@ -1,0 +1,30 @@
+# Dependabot version updates. Weekly, minor and patch updates grouped per
+# ecosystem, major updates one pull request each.
+# Commits are "chore(deps): ...", which semantic-release does not release on:
+# merging one of these pull requests ships nothing by itself.
+# labels: [] stops Dependabot creating its default labels; this repository has
+# no "dependencies" label.
+#
+# github-actions covers the workflows and the actions this action itself
+# calls (action.yml). A pull request here changes what customers on @v1 run
+# only if it is merged as fix: or feat:, which Dependabot never does; the
+# pins reach customers with the next real release.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "07:30"
+      timezone: Europe/London
+    open-pull-requests-limit: 5
+    labels: []
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      github-actions-minor-patch:
+        update-types:
+          - minor
+          - patch
