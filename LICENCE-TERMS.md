@@ -1,7 +1,5 @@
 # Nocrus Mobile Release: Licence Terms
 
-> **Draft terms pending legal review.**
-
 Copyright Nocrus Limited (company number 10240445, England and Wales). All rights reserved. This is commercial software, not open source.
 
 1. **Signed agreement required.** You may use Nocrus Mobile Release (this GitHub Action, the compiled tool it downloads, and the Nocrus licensing service) only under a signed licence agreement or order with Nocrus Limited. That agreement prevails over this file.
